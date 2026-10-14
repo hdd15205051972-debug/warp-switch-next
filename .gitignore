@@ -1,0 +1,17 @@
+.DS_Store
+.git/
+build/
+module-cache/
+*.app/
+*.zip
+*.dmg
+*.log
+account*.json
+runtime.json
+config.json
+settings.json
+state.json
+last-route.json
+proxy-snapshot.json
+*.pem
+*.key
