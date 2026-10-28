@@ -6,7 +6,7 @@
 
 ## 下载和安装
 
-从 **[Releases 下载最新版](https://github.com/hdd15205051972-debug/warp-switch-next/releases/latest)** 中下载 `WARP-Switch-Next-1.1.0-macOS-universal.zip`。
+从 **[Releases 下载最新版](https://github.com/hdd15205051972-debug/warp-switch-next/releases/latest)** 中下载 `WARP-Switch-Next-1.1.1-macOS-universal.zip`。
 
 1. 解压，把「WARP 新开关.app」拖到「应用程序」。
 2. 打开应用，首次点击「同意条款并注册」，应用会向 Cloudflare 注册属于你自己的免费 WARP 账号，然后连接。

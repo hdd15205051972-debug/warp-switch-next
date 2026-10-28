@@ -1,0 +1,44 @@
+name: Build macOS app
+
+# Every push is compiled and self-tested on a real Mac.
+# Pushing a tag like v1.1.1 also publishes a Release with the zip.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build universal app (runs --self-test at the end)
+        run: bash build.sh
+
+      - name: Package zip
+        run: |
+          APP="build/WARP 新开关.app"
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")
+          ZIP="build/WARP-Switch-Next-$VERSION-macOS-universal.zip"
+          ditto -c -k --keepParent "$APP" "$ZIP"
+          shasum -a 256 "$ZIP"
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WARP-Switch-Next-macOS
+          path: ${{ env.ZIP }}
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ZIP" \
+            --title "WARP 新开关 ${GITHUB_REF_NAME#v}" \
+            --notes "修复合盖睡眠后连接自动断开的问题：唤醒后会等待网络恢复，并自动重新建立连接；隧道长时间无法自行恢复时也会先自动重建，重建失败才恢复系统代理并提示重试。"
