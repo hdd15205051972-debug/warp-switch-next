@@ -13,7 +13,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # macOS arm64 runners are often capacity-limited; build.sh cross-compiles both
+    # architectures, so the Intel runner produces the same universal app.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
