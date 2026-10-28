@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import Network
 
 let fm = FileManager.default
 let proxyPort = 7891
@@ -267,6 +268,20 @@ final class ConnectionWorker {
         }
         return false
     }
+    /// Rebuild the tunnel while the system proxy stays on: the last working entry first,
+    /// then up to two others, keeping the handshake mode that worked before.
+    func rebuild(endpoints: [String], account: [String: Any]) throws -> Bool {
+        let current = state.endpoint, fragmented = state.fragmented
+        var order = endpoints.filter { $0 != current }
+        if endpoints.contains(current) { order.insert(current, at: 0) }
+        let tries = Array(order.prefix(3))
+        for (index, endpoint) in tries.enumerated() {
+            if stopped { return false }
+            publish("reconnecting", "正在重新建立连接（\(index + 1)/\(tries.count)）")
+            if try attempt(endpoint: endpoint, fragment: fragmented, account: account) { return true }
+        }
+        return false
+    }
     func run() -> Int32 {
         for sig in [SIGTERM, SIGINT, SIGHUP] {
             signal(sig, SIG_IGN)
@@ -326,25 +341,58 @@ final class ConnectionWorker {
             }
             try privateJSON(CachedRoute(endpoint: state.endpoint, sni: settings.sni, fragmented: state.fragmented), to: directory.appendingPathComponent("last-route.json"))
             if testOnly { publish("on", "测试通过：WARP 已验证，未修改系统代理"); return 0 }
+            // Watches whether the Mac has any usable network (Wi-Fi rejoins a few seconds after wake).
+            let network = NWPathMonitor()
+            network.start(queue: DispatchQueue(label: "warp.network"))
+            defer { network.cancel() }
+            var online: Bool { network.currentPath.status == .satisfied }
             try proxy.enable()
             publish("on", "已连接 · 浏览器及支持系统代理的 App 可使用")
+            var lastWall = Date().timeIntervalSince1970
+            var lastAwake = ProcessInfo.processInfo.systemUptime
+            var rebuildWhenOnline = false
             while !stopped {
                 pause(5)
                 if stopped { break }
+                // systemUptime stops while the Mac sleeps but the wall clock keeps going,
+                // so a gap between the two means the lid was closed and we just woke up.
+                let wall = Date().timeIntervalSince1970, awake = ProcessInfo.processInfo.systemUptime
+                if (wall - lastWall) - (awake - lastAwake) > 10 { rebuildWhenOnline = true; failureCycles = 0 }
+                lastWall = wall; lastAwake = awake
                 let t = trace()
                 if t["warp"] == "on" || t["warp"] == "plus" {
-                    failureCycles = 0
+                    failureCycles = 0; rebuildWhenOnline = false
                     state.ip = t["ip"] ?? "—"; state.colo = t["colo"] ?? "—"
                     publish("on", "已连接 · 浏览器及支持系统代理的 App 可使用")
-                } else {
-                    failureCycles += 1
-                    publish("reconnecting", "连接中断，正在等待隧道恢复（\(failureCycles)/3）")
-                    if failureCycles >= 3 || child?.isRunning != true {
-                        try proxy.restore()
-                        publish("error", "连接中断，系统代理已恢复。请点“换入口重试”。")
-                        return 1
-                    }
+                    continue
                 }
+                // No network at all (e.g. Wi-Fi still rejoining after wake): wait, don't count it as a failure.
+                guard online else {
+                    publish("reconnecting", "等待网络恢复，恢复后会自动重新连接…")
+                    continue
+                }
+                failureCycles += 1
+                // A short drop while awake: give the tunnel's own reconnect a chance first.
+                if !rebuildWhenOnline && failureCycles < 3 && child?.isRunning == true {
+                    publish("reconnecting", "连接中断，正在等待隧道恢复（\(failureCycles)/3）")
+                    continue
+                }
+                // After sleep the old tunnel is dead, and a long drop won't heal on its own: rebuild it.
+                if try rebuild(endpoints: endpoints, account: account) {
+                    failureCycles = 0; rebuildWhenOnline = false
+                    try? privateJSON(CachedRoute(endpoint: state.endpoint, sni: settings.sni, fragmented: state.fragmented), to: directory.appendingPathComponent("last-route.json"))
+                    publish("on", "已重新连接 · 浏览器及支持系统代理的 App 可使用")
+                    continue
+                }
+                if stopped { break }
+                if !online {
+                    rebuildWhenOnline = true
+                    publish("reconnecting", "等待网络恢复，恢复后会自动重新连接…")
+                    continue
+                }
+                try proxy.restore()
+                publish("error", "无法重新连接，系统代理已恢复。请点“换入口重试”。")
+                return 1
             }
         } catch { publish("error", error.localizedDescription); exitCode = 1 }
         return exitCode
