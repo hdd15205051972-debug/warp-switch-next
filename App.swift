@@ -1,5 +1,7 @@
 import Cocoa
 import SwiftUI
+import ServiceManagement
+import Network
 
 final class SwitchModel: ObservableObject {
     @Published var state = ConnectionState()
@@ -14,6 +16,12 @@ final class SwitchModel: ObservableObject {
     var log: FileHandle?
     var timer: Timer?
     var onState: (() -> Void)?
+    // Auto-connect: set when the user presses 关闭, so we never reconnect against their wish.
+    var userStopped = false
+    private var retryDelay: Double = 30
+    private var retryWork: DispatchWorkItem?
+    private let appNetwork = NWPathMonitor()
+    private var wasOnline = true
 
     init() {
         directory = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/WarpSwitchNext", isDirectory: true)
@@ -25,11 +33,72 @@ final class SwitchModel: ObservableObject {
             try ProxyManager(directory: directory).restore()
         } catch { state.phase = "error"; state.message = error.localizedDescription }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
+        // Keep the login item in step with the setting (e.g. after the app was replaced by an update).
+        if settings.autoConnect == true && SMAppService.mainApp.status == .notRegistered {
+            try? SMAppService.mainApp.register()
+        }
+        // Lid opened: reconnect if the connection is no longer running.
+        _ = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.autoResume(after: 3)
+        }
+        // Network came back (joined Wi-Fi): reconnect if the connection is no longer running.
+        appNetwork.pathUpdateHandler = { [weak self] path in
+            let online = path.status == .satisfied
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if online && !self.wasOnline { self.autoResume(after: 2) }
+                self.wasOnline = online
+            }
+        }
+        appNetwork.start(queue: DispatchQueue(label: "warp.app-network"))
     }
     func refresh() {
         if working && !registering, let latest = readJSON(ConnectionState.self, from: directory.appendingPathComponent("state.json")) {
             state = latest
+            if latest.phase == "on" { retryDelay = 30 }
         }
+        onState?()
+    }
+    var autoConnect: Bool { settings.autoConnect == true }
+    var shouldAutoConnect: Bool { autoConnect && !userStopped && !needsSetup }
+    func saveSettings() {
+        try? privateJSON(settings, to: directory.appendingPathComponent("settings.json"))
+    }
+    /// Start connecting on our own, unless the user turned it off or it is already running.
+    func autoResume(after delay: Double) {
+        guard shouldAutoConnect else { return }
+        retryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.shouldAutoConnect, !self.working, !self.stopping else { return }
+            self.start()
+        }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+    func userStart() { userStopped = false; retryDelay = 30; start() }
+    func userStop() { userStopped = true; retryWork?.cancel(); stop() }
+    func setAutoConnect(_ on: Bool) {
+        let service = SMAppService.mainApp
+        if on {
+            if service.status != .enabled { do { try service.register() } catch {
+                if service.status != .requiresApproval && service.status != .enabled {
+                    let alert = NSAlert(); alert.messageText = "无法加入登录项"
+                    alert.informativeText = "macOS 未允许 WARP 新开关在登录时启动：\(error.localizedDescription)"
+                    alert.runModal(); return
+                }
+            } }
+            if service.status == .requiresApproval {
+                let alert = NSAlert(); alert.messageText = "请在系统设置里允许"
+                alert.informativeText = "macOS 需要你确认：在「系统设置 → 通用 → 登录项与扩展」中打开 WARP 新开关，开机后才会自动连接。"
+                alert.addButton(withTitle: "打开系统设置"); alert.addButton(withTitle: "稍后")
+                if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
+            }
+        } else {
+            try? service.unregister()
+            retryWork?.cancel()
+        }
+        settings.autoConnect = on
+        saveSettings()
         onState?()
     }
     func registerAccount(fresh: Bool) {
@@ -117,6 +186,10 @@ final class SwitchModel: ObservableObject {
         if state.phase != "error" {
             state = ConnectionState()
             state.message = "已关闭，系统代理已恢复"
+        } else if shouldAutoConnect {
+            // Auto-connect is on and the user didn't turn it off: try again later, backing off.
+            autoResume(after: retryDelay)
+            retryDelay = min(retryDelay * 2, 300)
         }
         onState?()
     }
@@ -134,6 +207,7 @@ final class SwitchModel: ObservableObject {
         }
     }
     func retry() {
+        userStopped = false; retryWork?.cancel()
         if working { stop { [weak self] in self?.start(fresh: true) } }
         else { start(fresh: true) }
     }
@@ -215,8 +289,17 @@ struct SwitchView: View {
                     Text("兼容模式").tag("compatible")
                 }.labelsHidden().frame(width: 160).disabled(model.working)
             }.font(.system(size: 13))
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("开机时自动连接").foregroundStyle(.secondary)
+                    Text("合盖唤醒、网络恢复后也会自动重连").font(.system(size: 11)).foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Toggle("开机时自动连接", isOn: Binding(get: { model.autoConnect }, set: { model.setAutoConnect($0) }))
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small).disabled(model.needsSetup)
+            }.font(.system(size: 13))
             Button {
-                model.working ? model.stop() : model.start()
+                model.working ? model.userStop() : model.userStart()
             } label: {
                 Text(model.working ? (model.registering ? "取消注册" : "关闭") : (model.needsSetup ? "同意条款并注册" : "开启")).font(.system(size: 19, weight: .bold)).frame(maxWidth: .infinity).padding(.vertical, 13)
                     .foregroundStyle(.white).background(model.working ? Color.red : Color.blue, in: Capsule())
@@ -237,7 +320,7 @@ struct SwitchView: View {
                     .font(.system(size: 11)).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
-        }.padding(28).frame(width: 460, height: 780)
+        }.padding(28).frame(width: 460, height: 830)
     }
 }
 
@@ -250,35 +333,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: "io.github.warp-switch-next")
             .filter { $0.processIdentifier != getpid() }
         if let other = others.first { other.activate(); NSApp.terminate(nil); return }
+        // Launched by macOS at login (from 登录项)? Then connect quietly from the menu bar.
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        let loginLaunch = event?.eventID == AEEventID(kAEOpenApplication)
+            && event?.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == OSType(keyAELaunchedAsLogInItem)
         model = SwitchModel()
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 780), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        buildMainMenu()
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 830), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "WARP 新开关"; window.isReleasedWhenClosed = false; window.delegate = self
         window.contentView = NSHostingView(rootView: SwitchView(model: model))
-        window.center(); window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        window.center()
+        if !(loginLaunch && model.autoConnect) {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         status.button?.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "WARP 新开关")
         model.onState = { [weak self] in self?.updateMenu() }
         updateMenu()
-        if CommandLine.arguments.contains("--connect") && !model.needsSetup { model.start() }
+        if (CommandLine.arguments.contains("--connect") || model.autoConnect) && !model.needsSetup { model.start() }
+    }
+    func buildMainMenu() {
+        let main = NSMenu()
+        let appItem = NSMenuItem(); main.addItem(appItem)
+        let appMenu = NSMenu(title: "WARP 新开关")
+        let auto = NSMenuItem(title: "开机时自动连接", action: #selector(toggleAutoConnect), keyEquivalent: ""); auto.target = self
+        appMenu.addItem(auto); appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "隐藏 WARP 新开关", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "退出 WARP 新开关", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        // Edit menu so ⌘C / ⌘V work in the 伪装域名 text field.
+        let editItem = NSMenuItem(); main.addItem(editItem)
+        let edit = NSMenu(title: "编辑")
+        edit.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        NSApp.mainMenu = main
     }
     func updateMenu() {
         guard let model else { return }
         let menu = NSMenu()
         let label = NSMenuItem(title: "WARP 新开关 · \(model.title)", action: nil, keyEquivalent: "")
         menu.addItem(label); menu.addItem(.separator())
-        func item(_ title: String, _ action: Selector) {
-            let i = NSMenuItem(title: title, action: action, keyEquivalent: ""); i.target = self; menu.addItem(i)
+        @discardableResult func item(_ title: String, _ action: Selector) -> NSMenuItem {
+            let i = NSMenuItem(title: title, action: action, keyEquivalent: ""); i.target = self; menu.addItem(i); return i
         }
         item("显示窗口", #selector(showWindow)); item(model.working ? "关闭连接" : model.needsSetup ? "同意条款并注册" : "开启连接", #selector(toggle))
-        item("换入口重试", #selector(retry)); menu.addItem(.separator()); item("退出", #selector(quit))
+        item("换入口重试", #selector(retry)); menu.addItem(.separator())
+        item("开机时自动连接", #selector(toggleAutoConnect)).state = model.autoConnect ? .on : .off
+        menu.addItem(.separator()); item("退出", #selector(quit))
         status.menu = menu
         status.button?.toolTip = "WARP 新开关 · \(model.title)"
+        NSApp.mainMenu?.items.first?.submenu?.items.first?.state = model.autoConnect ? .on : .off
     }
     @objc func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
-    @objc func toggle() { model.working ? model.stop() : model.start() }
+    @objc func toggle() { model.working ? model.userStop() : model.userStart() }
     @objc func retry() { model.retry() }
+    @objc func toggleAutoConnect() { model.setAutoConnect(!model.autoConnect) }
     @objc func quit() { NSApp.terminate(nil) }
+    // Clicking the Dock icon brings the window back after it was closed.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showWindow() }
+        return true
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if ending || model?.working != true { return .terminateNow }
         ending = true

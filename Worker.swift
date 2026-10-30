@@ -51,6 +51,8 @@ struct ConnectionSettings: Codable {
     var sni = "www.bing.com"
     var mode = "auto"
     var fresh = false
+    // Optional so settings.json written by older versions (without this key) still decodes.
+    var autoConnect: Bool? = nil
 }
 struct ConnectionState: Codable {
     var phase = "off"
@@ -299,10 +301,23 @@ final class ConnectionWorker {
         }
         do {
             guard validDomain(settings.sni) else { throw NSError(domain: "Settings", code: 1, userInfo: [NSLocalizedDescriptionKey: "请输入有效的伪装域名"] ) }
+            // Watches whether the Mac has any usable network (Wi-Fi joins a few seconds after login or wake).
+            let network = NWPathMonitor()
+            network.start(queue: DispatchQueue(label: "warp.network"))
+            defer { network.cancel() }
+            var online: Bool { network.currentPath.status == .satisfied }
             if !testOnly {
                 try proxy.restore()
                 publish("connecting", "正在切换到新开关…")
                 try proxy.stopLegacy()
+            }
+            // Right after login the network is usually not up yet; trying entries now would only fail.
+            pause(0.5)
+            if !online {
+                publish("connecting", "等待网络连接…")
+                let deadline = Date().addingTimeInterval(90)
+                while !stopped && !online && Date() < deadline { pause(1) }
+                if stopped { return 0 }
             }
             let accountPath = directory.appendingPathComponent("account.json")
             guard let data = try? Data(contentsOf: accountPath),
@@ -341,11 +356,6 @@ final class ConnectionWorker {
             }
             try privateJSON(CachedRoute(endpoint: state.endpoint, sni: settings.sni, fragmented: state.fragmented), to: directory.appendingPathComponent("last-route.json"))
             if testOnly { publish("on", "测试通过：WARP 已验证，未修改系统代理"); return 0 }
-            // Watches whether the Mac has any usable network (Wi-Fi rejoins a few seconds after wake).
-            let network = NWPathMonitor()
-            network.start(queue: DispatchQueue(label: "warp.network"))
-            defer { network.cancel() }
-            var online: Bool { network.currentPath.status == .satisfied }
             try proxy.enable()
             publish("on", "已连接 · 浏览器及支持系统代理的 App 可使用")
             var lastWall = Date().timeIntervalSince1970
