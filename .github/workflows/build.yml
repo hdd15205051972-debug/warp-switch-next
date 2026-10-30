@@ -51,4 +51,4 @@ jobs:
           fi
           gh release create "$TAG" "$ZIP" --target "$GITHUB_SHA" \
             --title "WARP 新开关 $VERSION" \
-            --notes "修复合盖睡眠后连接自动断开的问题：唤醒后会等待网络恢复，并自动重新建立连接；隧道长时间无法自行恢复时也会先自动重建，重建失败才恢复系统代理并提示重试。"
+            --notes-file release-notes.md
