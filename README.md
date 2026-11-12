@@ -4,11 +4,11 @@
 
 **适用于 Windows 10（1803 或更新）和 Windows 11，支持 x64、ARM64 和 32 位系统。** 使用 Windows 自带的 .NET Framework，无需另装运行库。此项目为非官方客户端，与 Cloudflare 无隶属关系。
 
-macOS 版在本仓库的 [`main` 分支](https://github.com/hdd15205051972-debug/warp-switch-next/tree/main)。
+macOS 版是另一个独立项目：[warp-switch-next](https://github.com/hdd15205051972-debug/warp-switch-next)。
 
 ## 下载和安装
 
-下载 `WARP-Switch-Next-Windows-1.0.0.zip`。
+从 **[Releases 下载最新版](https://github.com/hdd15205051972-debug/warp-switch-next-windows/releases/latest)** 中下载 `WARP-Switch-Next-Windows-1.0.0.zip`。
 
 1. 解压，把「WARP 新开关」文件夹放到一个固定的位置（例如「文档」或 `D:\Apps`）。打开开机自动连接后不要再移动它。
 2. 双击 `WARP 新开关.exe`。程序没有代码签名，Windows 可能提示「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」。
@@ -54,8 +54,8 @@ macOS 版在本仓库的 [`main` 分支](https://github.com/hdd15205051972-debug
 需要 Windows 和 .NET SDK（6 或更新）。
 
 ```powershell
-git clone -b windows https://github.com/hdd15205051972-debug/warp-switch-next.git
-cd warp-switch-next
+git clone https://github.com/hdd15205051972-debug/warp-switch-next-windows.git
+cd warp-switch-next-windows
 ./build.ps1
 ```
 
@@ -63,7 +63,7 @@ cd warp-switch-next
 
 ## 测试
 
-每次推送都会在 GitHub 的 Windows 电脑上自动编译并运行：
+每次推送都会在 GitHub 的 Windows 电脑上自动编译并运行下面的测试。`main` 分支出现新版本号时，全部测试通过后自动发布 Release。
 
 - `--self-test`：TLS 分片与重组、部分读取与尾随记录、域名校验、代理规则、设置和账号文件（不改动电脑任何设置，可在本机运行）。
 - `--proxy-test`：设置并恢复系统代理，包括自动检测、设置脚本、已有其他代理、连接期间用户改动、崩溃后恢复等情况。
