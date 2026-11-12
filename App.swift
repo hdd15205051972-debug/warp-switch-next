@@ -499,9 +499,6 @@ extension AppDelegate {
             let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)
             if let rep { host.cacheDisplay(in: host.bounds, to: rep) }
             save(rep, name)
-            // Second rendering path, straight from SwiftUI (some native controls show as placeholders here).
-            let renderer = ImageRenderer(content: SwitchView(model: preview))
-            if let image = renderer.cgImage { save(NSBitmapImageRep(cgImage: image), name + "-swiftui") }
         }
         func canvas(_ width: Int, _ height: Int, _ draw: () -> Void) -> NSBitmapImageRep? {
             guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8,
