@@ -23,6 +23,16 @@ jobs:
       - name: Build universal app (runs --self-test at the end)
         run: bash build.sh
 
+      - name: Screenshots
+        timeout-minutes: 5
+        run: '"build/WARP 新开关.app/Contents/MacOS/WarpSwitchNext" --screenshots "$PWD/screenshots"'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots/
+
       - name: Package zip
         run: |
           APP="build/WARP 新开关.app"
