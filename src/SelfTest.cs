@@ -214,10 +214,12 @@ namespace WarpSwitchNext
                 foreach (var mode in new[] { "fragment", "compatible" })
                 {
                     var w = new ConnectionWorker(dataDir, usque, "www.bing.com", mode, fresh: false, testOnly: true);
-                    w.StateChanged += s => r.Line("      [" + s.Phase + "] " + s.Message);
+                    StateInfo reached = null;
+                    w.StateChanged += s => { r.Line("      [" + s.Phase + "] " + s.Message); if (s.Phase == "on") reached = s; };
                     int code = w.Run();
-                    var s2 = w.Snapshot();
-                    r.Check(code == 0 && s2.Phase == "on", (mode == "fragment" ? "握手分片" : "兼容模式") + " reached WARP: entry " + s2.Endpoint + ", exit IP " + s2.Ip + ", node " + s2.Colo);
+                    // A test run always ends with 已关闭; what matters is that it reached 已连接 on the way.
+                    r.Check(code == 0 && reached != null && reached.Fragmented == (mode == "fragment") && reached.Ip != "—",
+                            (mode == "fragment" ? "握手分片" : "兼容模式") + " reached WARP: entry " + reached?.Endpoint + ", exit IP " + reached?.Ip + ", node " + reached?.Colo);
                 }
 
                 // Full run, as the app does it: system proxy on, real traffic, then off again.

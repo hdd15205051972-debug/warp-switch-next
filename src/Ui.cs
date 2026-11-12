@@ -128,14 +128,11 @@ namespace WarpSwitchNext
                     var color = key == "on" ? Palette.Green : key == "error" ? Palette.Orange : key == "off" ? Palette.Gray : Palette.Blue;
                     using (var shield = Shield(box))
                     using (var brush = new SolidBrush(color)) g.FillPath(brush, shield);
-                    if (key == "on" || key == "busy")
+                    if (key == "on")
                     {
                         var points = Check(box, out float width);
                         using (var pen = new Pen(Color.White, Math.Max(1.6f, width)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
-                        {
-                            if (key == "on") g.DrawLines(pen, points);
-                            else g.DrawLine(pen, points[0].X, points[1].Y - width * 0.6f, points[2].X, points[1].Y - width * 0.6f);
-                        }
+                            g.DrawLines(pen, points);
                     }
                 }
                 IntPtr handle = bmp.GetHicon();
