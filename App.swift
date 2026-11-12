@@ -237,9 +237,41 @@ final class SwitchModel: ObservableObject {
     }
 }
 
+/// The app icon (AppIcon.icns in the bundle).
+let appIcon: NSImage = NSApplication.shared.applicationIconImage ?? NSImage()
+
+func phaseColor(_ phase: String) -> NSColor {
+    switch phase {
+    case "on": return .systemGreen
+    case "error": return .systemOrange
+    case "off": return .systemGray
+    default: return .systemBlue
+    }
+}
+
+private var statusImages: [String: NSImage] = [:]
+/// Menu bar icon: the app icon with a small coloured dot for the connection state.
+func statusImage(_ phase: String) -> NSImage {
+    let key = ["on", "error", "off"].contains(phase) ? phase : "busy"
+    if let cached = statusImages[key] { return cached }
+    let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+        // The icon has transparent margins (macOS icon grid), so draw it a little larger.
+        appIcon.draw(in: rect.insetBy(dx: -2.2, dy: -2.2))
+        let d: CGFloat = 8.5
+        let dot = NSRect(x: rect.maxX - d, y: rect.minY, width: d, height: d)
+        NSColor.white.setFill(); NSBezierPath(ovalIn: dot).fill()
+        phaseColor(key).setFill(); NSBezierPath(ovalIn: dot.insetBy(dx: 1.3, dy: 1.3)).fill()
+        return true
+    }
+    image.isTemplate = false
+    statusImages[key] = image
+    return image
+}
+
 struct SwitchView: View {
     @ObservedObject var model: SwitchModel
-    var tint: Color { model.state.phase == "on" ? .green : model.state.phase == "error" ? .orange : .blue }
+    var tint: Color { Color(nsColor: phaseColor(model.state.phase)) }
+    var busy: Bool { ["connecting", "reconnecting", "stopping", "registering"].contains(model.state.phase) }
     func row(_ label: String, _ value: String) -> some View {
         HStack { Text(label).foregroundStyle(.secondary); Spacer(); Text(value).font(.system(size: 14, design: .monospaced)).textSelection(.enabled).lineLimit(1).minimumScaleFactor(0.6) }
             .padding(.vertical, 10)
@@ -247,8 +279,8 @@ struct SwitchView: View {
     var body: some View {
         VStack(spacing: 18) {
             HStack(spacing: 12) {
-                Image(systemName: "shield.lefthalf.filled").font(.system(size: 31)).foregroundStyle(.white)
-                    .frame(width: 58, height: 58).background(.blue.gradient, in: RoundedRectangle(cornerRadius: 15))
+                Image(nsImage: appIcon).resizable().interpolation(.high)
+                    .frame(width: 70, height: 70).frame(width: 58, height: 58)
                 VStack(alignment: .leading, spacing: 5) {
                     Text("WARP 新开关").font(.system(size: 23, weight: .bold))
                     Text("不同入口 · HTTPS 连接 · 握手分片").font(.system(size: 12)).foregroundStyle(.secondary)
@@ -256,16 +288,26 @@ struct SwitchView: View {
                 Spacer()
             }
             Spacer(minLength: 2)
+            // The app picture in a round frame. Ring colour shows the state: grey (off, picture in
+            // black and white), blue with a spinner (busy, picture faded), green with a check (connected),
+            // orange with "!" (failed).
             ZStack {
-                Circle().fill(tint.opacity(0.12)).frame(width: 136, height: 136)
-                Circle().stroke(tint.opacity(0.5), lineWidth: 3).frame(width: 136, height: 136)
-                if ["connecting", "reconnecting", "stopping", "registering"].contains(model.state.phase) {
+                Image(nsImage: appIcon).resizable().interpolation(.high)
+                    .frame(width: 176, height: 176)
+                    .frame(width: 132, height: 132)
+                    .clipShape(Circle())
+                    .grayscale(model.state.phase == "off" ? 1 : 0)
+                    .opacity(busy ? 0.5 : 1)
+                Circle().stroke(tint.opacity(busy ? 0.35 : 1), lineWidth: 4).frame(width: 132, height: 132)
+                if busy {
                     ProgressView().controlSize(.large).tint(tint)
-                } else {
-                    Image(systemName: model.state.phase == "on" ? "checkmark.shield.fill" : "shield.lefthalf.filled")
-                        .font(.system(size: 60)).foregroundStyle(tint)
+                } else if model.state.phase == "on" || model.state.phase == "error" {
+                    Image(systemName: model.state.phase == "on" ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .font(.system(size: 34)).symbolRenderingMode(.palette).foregroundStyle(.white, tint)
+                        .background(Circle().fill(.white).frame(width: 36, height: 36))
+                        .offset(x: 46, y: 46)
                 }
-            }
+            }.frame(width: 136, height: 136)
             Text(model.title).font(.system(size: 25, weight: .semibold))
             Text(model.state.message).font(.system(size: 13)).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(height: 38)
@@ -330,6 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var status: NSStatusItem!
     var ending = false
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--screenshots") { renderScreenshots() }
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: "io.github.warp-switch-next")
             .filter { $0.processIdentifier != getpid() }
         if let other = others.first { other.activate(); NSApp.terminate(nil); return }
@@ -348,7 +391,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSApp.activate(ignoringOtherApps: true)
         }
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        status.button?.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "WARP 新开关")
+        status.button?.image = statusImage(model.state.phase)
+        status.button?.image?.accessibilityDescription = "WARP 新开关"
         model.onState = { [weak self] in self?.updateMenu() }
         updateMenu()
         if (CommandLine.arguments.contains("--connect") || model.autoConnect) && !model.needsSetup { model.start() }
@@ -387,6 +431,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(.separator()); item("退出", #selector(quit))
         status.menu = menu
         status.button?.toolTip = "WARP 新开关 · \(model.title)"
+        status.button?.image = statusImage(model.state.phase)
         NSApp.mainMenu?.items.first?.submenu?.items.first?.state = model.autoConnect ? .on : .off
     }
     @objc func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
@@ -406,4 +451,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return .terminateLater
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+}
+
+extension AppDelegate {
+    /// --screenshots <folder>: renders the window in each state, the app icon and the menu bar
+    /// icons to PNG files, then quits. Used by the build to check the interface.
+    func renderScreenshots() {
+        let args = CommandLine.arguments
+        let folder = args.firstIndex(of: "--screenshots").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "screenshots"
+        try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        var failures = 0
+        func save(_ rep: NSBitmapImageRep?, _ name: String) {
+            let url = URL(fileURLWithPath: folder).appendingPathComponent(name + ".png")
+            if let data = rep?.representation(using: .png, properties: [:]), (try? data.write(to: url)) != nil {
+                print("ok    saved \(url.path)")
+            } else {
+                failures += 1; print("FAIL  could not save \(name)")
+            }
+        }
+        func scene(_ phase: String, _ message: String, endpoint: String = "—", ip: String = "—", colo: String = "—") -> ConnectionState {
+            var s = ConnectionState(); s.phase = phase; s.message = message
+            s.endpoint = endpoint; s.ip = ip; s.colo = colo
+            if endpoint != "—" { s.sni = "www.bing.com" }
+            return s
+        }
+        let preview = SwitchModel()
+        let scenes: [(String, ConnectionState, Bool, Bool, Bool)] = [
+            ("1-first-run", ConnectionState(), true, false, false),
+            ("2-registering", scene("registering", "正在创建你的独立免费 WARP 账号…"), true, true, false),
+            ("3-connecting", scene("connecting", "正在尝试入口 2/8 · 握手分片", endpoint: "162.159.198.4"), false, true, true),
+            ("4-connected", scene("on", "已连接 · 浏览器及支持系统代理的 App 可使用", endpoint: "162.159.198.4", ip: "104.28.203.89", colo: "IAD"), false, true, true),
+            ("5-error", scene("error", "这些入口暂时无法通过验证。可换一个伪装域名或点“换入口重试”。"), false, false, true),
+            ("6-off", scene("off", "已关闭，系统代理已恢复"), false, false, false),
+        ]
+        var windows: [NSWindow] = []
+        for (name, state, setup, working, auto) in scenes {
+            preview.state = state; preview.needsSetup = setup; preview.working = working
+            preview.registering = state.phase == "registering"; preview.settings.autoConnect = auto
+            let host = NSHostingView(rootView: SwitchView(model: preview))
+            host.frame = NSRect(x: 0, y: 0, width: 460, height: 830)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            windows.append(window)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)
+            if let rep { host.cacheDisplay(in: host.bounds, to: rep) }
+            save(rep, name)
+            // Second rendering path, straight from SwiftUI (some native controls show as placeholders here).
+            let renderer = ImageRenderer(content: SwitchView(model: preview))
+            if let image = renderer.cgImage { save(NSBitmapImageRep(cgImage: image), name + "-swiftui") }
+        }
+        func canvas(_ width: Int, _ height: Int, _ draw: () -> Void) -> NSBitmapImageRep? {
+            guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8,
+                                             samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                             bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            draw()
+            NSGraphicsContext.restoreGraphicsState()
+            return rep
+        }
+        save(canvas(256, 256) { appIcon.draw(in: NSRect(x: 0, y: 0, width: 256, height: 256)) }, "0-app-icon")
+        save(canvas(216, 52) {
+            NSColor(white: 0.13, alpha: 1).setFill(); NSRect(x: 0, y: 0, width: 216, height: 52).fill()
+            for (i, phase) in ["off", "connecting", "on", "error"].enumerated() {
+                statusImage(phase).draw(in: NSRect(x: 8 + CGFloat(i) * 52, y: 8, width: 36, height: 36))
+            }
+        }, "7-menu-bar-icons")
+        print(failures == 0 ? "PASS: window, app icon and menu bar icons rendered" : "FAILED: \(failures) image(s)")
+        exit(failures == 0 ? 0 : 1)
+    }
 }

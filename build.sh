@@ -12,8 +12,8 @@ done
 lipo -create build/WarpSwitchNext-arm64 build/WarpSwitchNext-x86_64 -output "$DEST/Contents/MacOS/WarpSwitchNext"
 cp "$USQUE" "$DEST/Contents/Helpers/usque"
 cp LICENSE USQUE-LICENSE.txt README.md "$DEST/Contents/Resources/"
-swiftc -swift-version 5 -module-cache-path "$PWD/build/module-cache" Icon.swift -o build/make-icon
-build/make-icon build/icon.png
+# App icon: AppIcon.png (1024×1024, macOS icon grid)
+cp AppIcon.png build/icon.png
 mkdir -p build/AppIcon.iconset
 for s in 16 32 128 256 512; do
   sips -z "$s" "$s" build/icon.png --out "build/AppIcon.iconset/icon_${s}x${s}.png" >/dev/null
@@ -40,8 +40,8 @@ cat > "$DEST/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>WarpSwitchNext</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
-<key>CFBundleShortVersionString</key><string>1.2.0</string>
-<key>CFBundleVersion</key><string>4</string>
+<key>CFBundleShortVersionString</key><string>1.2.1</string>
+<key>CFBundleVersion</key><string>5</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
