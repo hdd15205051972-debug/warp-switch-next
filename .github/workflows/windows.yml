@@ -1,0 +1,75 @@
+name: Build Windows app
+
+# Builds the Windows version on a real Windows machine and tests it:
+# unit checks, setting and restoring the system proxy, screenshots of the window,
+# and a real WARP connection (register, connect in both modes, browse through the system proxy).
+on:
+  push:
+    branches: ["windows", "windows-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: ./build.ps1
+
+      - name: Unit self-test
+        run: |
+          $exe = Resolve-Path 'dist/WARP 新开关/WARP 新开关.exe'
+          $p = Start-Process -FilePath $exe -ArgumentList '--self-test', '--out', "$PWD\selftest.txt" -Wait -PassThru
+          Get-Content selftest.txt
+          exit $p.ExitCode
+
+      - name: System proxy test
+        run: |
+          $exe = Resolve-Path 'dist/WARP 新开关/WARP 新开关.exe'
+          $p = Start-Process -FilePath $exe -ArgumentList '--proxy-test', '--out', "$PWD\proxytest.txt" -Wait -PassThru
+          Get-Content proxytest.txt
+          exit $p.ExitCode
+
+      - name: Screenshots
+        run: |
+          $exe = Resolve-Path 'dist/WARP 新开关/WARP 新开关.exe'
+          $p = Start-Process -FilePath $exe -ArgumentList '--screenshots', "$PWD\screenshots", '--out', "$PWD\screenshots.txt" -Wait -PassThru
+          Get-Content screenshots.txt
+          exit $p.ExitCode
+
+      - name: Real WARP connection test
+        continue-on-error: true
+        timeout-minutes: 12
+        run: |
+          $exe = Resolve-Path 'dist/WARP 新开关/WARP 新开关.exe'
+          $data = Join-Path $env:RUNNER_TEMP 'warpdata'
+          $p = Start-Process -FilePath $exe -ArgumentList '--connect-test', '--data', $data, '--out', "$PWD\connecttest.txt" -Wait -PassThru
+          Get-Content connecttest.txt
+          New-Item -ItemType Directory -Force connect-logs | Out-Null
+          Get-ChildItem $data -Filter *.log | Copy-Item -Destination connect-logs
+          exit $p.ExitCode
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WARP-Switch-Next-Windows
+          path: dist/*.zip
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: |
+            selftest.txt
+            proxytest.txt
+            screenshots.txt
+            connecttest.txt
+            screenshots/
+            connect-logs/

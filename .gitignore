@@ -1,0 +1,16 @@
+build/
+dist/
+bin/
+obj/
+screenshots/
+connect-logs/
+*.zip
+*.log
+selftest.txt
+proxytest.txt
+connecttest.txt
+account*.json
+runtime.json
+settings.json
+last-route.json
+proxy-snapshot.json
